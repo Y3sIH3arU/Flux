@@ -1,62 +1,37 @@
-UPDATES WILL BE DONE REGULARLY EVERY DAY// EXPECT SOME "HOLE" DAYS WITH NO UPDATES
+# Flux
 
-UPDATES WILL ALWAYS BE AT NIGHT CENTRAL EUROPE TIME
+**A minimalist, extensible scripting language with blocking I/O, user‑defined blocks, and a secure FFI.**
 
-Flux 0.1.0 "Foundation"
+> UPDATES: Regular commits most nights (Central European Time).  
+> Some days may have no updates—check the commit history for activity.
 
-Features Included
+---
 
-    Core I/O: write for output, wait for user for blocking input
+## Flux 0.1.1 "Hardened"
 
-    Conditionals: if user said "..." then reply "..." with exact match
+[![Version](https://img.shields.io/badge/version-0.1.1-blue)](https://github.com/Y3sIH3arU/Flux/releases)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Security](https://img.shields.io/badge/security-hardened-success)](SECURITY.md)
 
-    Variables: set name to "value", set name to other, set name to 42
+### ✨ Features
 
-    User-defined blocks: define name as ... end and call by name
+- **Core I/O:** `write` for output, `wait for user` for blocking input.
+- **Conditionals:** `if user said "..." then reply "..."` with exact string matching.
+- **Variables:** `set name to "value"`, copy from other variables, or assign numbers.
+- **User‑defined Blocks:** `define name as ... end` – call reusable code by name.
+- **Foreign Function Interface:** `load "libm.so.6"` and `call sqrt 16.8` (whitelisted for security).
+- **Comments:** `#` to end of line.
+- **Command‑line Help:** `flux --help` prints usage reference.
+- **Memory Management:** AST is freed after execution.
 
-    Foreign Function Interface: load "lib.so" and call for sqrt, puts, sin, cos
+### 🔒 Security Hardening (v0.1.1)
 
-    Comments: # to end of line
+| Mitigation | Description |
+|------------|-------------|
+| **FFI Whitelist** | Only `sqrt`, `puts`, `sin`, `cos` allowed via `call`. |
+| **Library Whitelist** | `load` restricted to `libm.so.6` and `libc.so.6`; path traversal blocked. |
+| **Bounds Checking** | All string operations use safe, bounded copies. |
+| **Recursion Guard** | Block recursion limited to 100 depth. |
+| **Memory Safety** | Ring buffer prevents expression memory leaks. |
 
-    Command-line help: --help flag with usage reference
-
-    Memory management: AST cleanup after execution
-
-THE SYNTAXES SUMMARY:
-write "Hello"
-write variable
-wait for user
-if user said "hi" then reply "hey"
-set name to "Flux"
-define greet as
-    write "Hello from block!"
-end
-greet
-load "libm.so.6"
-call sqrt 16.8
-# This is a comment
-
-CONS:
-
-Limitations (by design for v0.1.0)
-
-    if body supports only one statement
-
-    FFI limited to hardcoded non-variadic functions
-
-    No loops or else clause
-
-    No line numbers in error messages
-
-
-V 0.1.0 THE "Foundation" UPDATES (LATEST):
-
-
-- Removed unused TOKEN_SAY
-- Fixed memory leaks with ring buffer for expression evaluation
-- Replaced unsafe strcpy with bounded strncpy
-- Added Makefile directory creation and .PHONY target
-- Clarified block calls vs variable identifiers
-- Added --help flag and AST cleanup
-- Stable FFI support for sqrt, puts, sin, cos
-
+### 📝 Syntax at a Glance
