@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <math.h>
+#include <libgen.h>   // for basename (optional, but we'll do manual check)
 
 static char last_input[256] = "";
 
@@ -27,6 +28,28 @@ static int block_count = 0;
 #define MAX_LIBS 16
 static void* lib_handles[MAX_LIBS];
 static int lib_count = 0;
+
+// Whitelist of allowed library basenames (no paths)
+static const char* allowed_libs[] = {
+    "libm.so.6",
+    "libc.so.6",
+    NULL
+};
+
+// Validate library name: no slashes, no "..", must be in whitelist
+static int is_library_allowed(const char *name) {
+    // Reject paths with directory separators or parent dir
+    if (strchr(name, '/') != NULL || strstr(name, "..") != NULL) {
+        return 0;
+    }
+    // Check against whitelist
+    for (int i = 0; allowed_libs[i] != NULL; i++) {
+        if (strcmp(name, allowed_libs[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 // Safe string copy
 static void safe_strcpy(char *dest, const char *src, size_t dest_size) {
@@ -110,7 +133,21 @@ static void define_block(const char *name, Node *body) {
     }
 }
 
+// Check if a function name is in the allowed set
+static int is_function_allowed(const char *name) {
+    static const char* allowed[] = {"sqrt", "puts", "sin", "cos", NULL};
+    for (int i = 0; allowed[i] != NULL; i++) {
+        if (strcmp(name, allowed[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 static void call_foreign_function(const char *name, Node *args) {
+    if (!is_function_allowed(name)) {
+        fprintf(stderr, "Runtime error: function '%s' not allowed (security restriction)\n", name);
+        return;
+    }
+    
     void *func_ptr = NULL;
     for (int i = 0; i < lib_count; i++) {
         func_ptr = dlsym(lib_handles[i], name);
@@ -203,10 +240,20 @@ void execute(Node *node) {
                 break;
             }
             case NODE_LOAD: {
+                // Security: validate library name
+                if (!is_library_allowed(node->value)) {
+                    fprintf(stderr, "Runtime error: library '%s' not allowed (security restriction)\n", node->value);
+                    break;
+                }
                 void *h = dlopen(node->value, RTLD_LAZY);
-                if (!h) fprintf(stderr, "Runtime error: cannot load '%s': %s\n", node->value, dlerror());
-                else if (lib_count < MAX_LIBS) lib_handles[lib_count++] = h;
-                else { dlclose(h); fprintf(stderr, "Runtime error: too many libraries\n"); }
+                if (!h) {
+                    fprintf(stderr, "Runtime error: cannot load '%s': %s\n", node->value, dlerror());
+                } else if (lib_count < MAX_LIBS) {
+                    lib_handles[lib_count++] = h;
+                } else {
+                    dlclose(h);
+                    fprintf(stderr, "Runtime error: too many libraries\n");
+                }
                 break;
             }
             case NODE_FCALL:
