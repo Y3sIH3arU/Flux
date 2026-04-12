@@ -94,16 +94,6 @@ Please see SECURITY.md for responsible disclosure guidelines.
 📄 License
 
 MIT – see LICENSE for details.
-text
 
 
----
-
-Now both `README.md` and `SECURITY.md` are consistent and reflect the **0.1.1 "Hardened"** release. Push them together with the tag:
-
-```bash
-git add README.md SECURITY.md
-git commit -m "Docs: update README and SECURITY for v0.1.1 Hardened"
-git push
-git push origin v0.1.1
 
