@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <math.h>
-#include <libgen.h>   // for basename (optional, but we'll do manual check)
 
 static char last_input[256] = "";
 
@@ -29,20 +28,31 @@ static int block_count = 0;
 static void* lib_handles[MAX_LIBS];
 static int lib_count = 0;
 
-// Whitelist of allowed library basenames (no paths)
+// Recursion depth guard
+#define MAX_RECURSION_DEPTH 100
+static int recursion_depth = 0;
+
+// Whitelist of allowed library basenames
 static const char* allowed_libs[] = {
     "libm.so.6",
     "libc.so.6",
     NULL
 };
 
-// Validate library name: no slashes, no "..", must be in whitelist
+// Whitelist of allowed function names for FFI
+static const char* allowed_functions[] = {
+    "sqrt",
+    "puts",
+    "sin",
+    "cos",
+    NULL
+};
+
 static int is_library_allowed(const char *name) {
-    // Reject paths with directory separators or parent dir
-    if (strchr(name, '/') != NULL || strstr(name, "..") != NULL) {
+    // Reject paths with directory separators, parent dir, or absolute paths
+    if (strchr(name, '/') != NULL || strstr(name, "..") != NULL || name[0] == '.') {
         return 0;
     }
-    // Check against whitelist
     for (int i = 0; allowed_libs[i] != NULL; i++) {
         if (strcmp(name, allowed_libs[i]) == 0) {
             return 1;
@@ -51,14 +61,21 @@ static int is_library_allowed(const char *name) {
     return 0;
 }
 
-// Safe string copy
+static int is_function_allowed(const char *name) {
+    for (int i = 0; allowed_functions[i] != NULL; i++) {
+        if (strcmp(name, allowed_functions[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void safe_strcpy(char *dest, const char *src, size_t dest_size) {
     if (!dest || dest_size == 0) return;
     strncpy(dest, src, dest_size - 1);
     dest[dest_size - 1] = '\0';
 }
 
-// Temporary buffer for expression results (ring buffer, no leak)
 #define TMP_BUF_SIZE 4
 static char tmp_buf[TMP_BUF_SIZE][256];
 static int tmp_idx = 0;
@@ -133,18 +150,9 @@ static void define_block(const char *name, Node *body) {
     }
 }
 
-// Check if a function name is in the allowed set
-static int is_function_allowed(const char *name) {
-    static const char* allowed[] = {"sqrt", "puts", "sin", "cos", NULL};
-    for (int i = 0; allowed[i] != NULL; i++) {
-        if (strcmp(name, allowed[i]) == 0) return 1;
-    }
-    return 0;
-}
-
 static void call_foreign_function(const char *name, Node *args) {
     if (!is_function_allowed(name)) {
-        fprintf(stderr, "Runtime error: function '%s' not allowed (security restriction)\n", name);
+        fprintf(stderr, "Runtime error: function '%s' not allowed (security policy)\n", name);
         return;
     }
     
@@ -199,8 +207,11 @@ void execute(Node *node) {
             case NODE_WAIT:
                 printf("> ");
                 fflush(stdout);
-                fgets(last_input, sizeof(last_input), stdin);
-                last_input[strcspn(last_input, "\n")] = '\0';
+                if (fgets(last_input, sizeof(last_input), stdin) == NULL) {
+                    last_input[0] = '\0';
+                } else {
+                    last_input[strcspn(last_input, "\n")] = '\0';
+                }
                 break;
             case NODE_IF_SAID: {
                 const char *expected = node->value;
@@ -234,15 +245,23 @@ void execute(Node *node) {
                 define_block(node->var_name, node->body);
                 break;
             case NODE_CALL: {
+                if (recursion_depth >= MAX_RECURSION_DEPTH) {
+                    fprintf(stderr, "Runtime error: maximum recursion depth exceeded\n");
+                    break;
+                }
                 Node *body = get_block(node->value);
-                if (body) execute(body);
-                else fprintf(stderr, "Runtime error: undefined block '%s'\n", node->value);
+                if (body) {
+                    recursion_depth++;
+                    execute(body);
+                    recursion_depth--;
+                } else {
+                    fprintf(stderr, "Runtime error: undefined block '%s'\n", node->value);
+                }
                 break;
             }
             case NODE_LOAD: {
-                // Security: validate library name
                 if (!is_library_allowed(node->value)) {
-                    fprintf(stderr, "Runtime error: library '%s' not allowed (security restriction)\n", node->value);
+                    fprintf(stderr, "Runtime error: library '%s' not allowed (security policy)\n", node->value);
                     break;
                 }
                 void *h = dlopen(node->value, RTLD_LAZY);
