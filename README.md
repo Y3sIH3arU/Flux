@@ -48,3 +48,15 @@ Limitations (by design for v0.1.0)
 
     No line numbers in error messages
 
+
+V 0.1.0 THE "Foundation" UPDATES (LATEST):
+
+
+- Removed unused TOKEN_SAY
+- Fixed memory leaks with ring buffer for expression evaluation
+- Replaced unsafe strcpy with bounded strncpy
+- Added Makefile directory creation and .PHONY target
+- Clarified block calls vs variable identifiers
+- Added --help flag and AST cleanup
+- Stable FFI support for sqrt, puts, sin, cos
+
