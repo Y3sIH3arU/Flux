@@ -6,13 +6,26 @@
 #include "parser.h"
 #include "interpreter.h"
 
+#include <stdlib.h>
 extern void cleanup_libraries();
+
+#define MAX_FILE_SIZE (10 * 1024 * 1024) // 10MB limit
 
 char* read_file(const char *filename) {
     FILE *f = fopen(filename, "rb");
     if (!f) { perror("fopen"); return NULL; }
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
+    if (len < 0) {
+        perror("ftell");
+        fclose(f);
+        return NULL;
+    }
+    if (len > MAX_FILE_SIZE) {
+        fprintf(stderr, "File too large: %ld bytes (max %d)\n", len, MAX_FILE_SIZE);
+        fclose(f);
+        return NULL;
+    }
     fseek(f, 0, SEEK_SET);
     char *buf = malloc(len + 1);
     if (!buf) { fclose(f); return NULL; }
@@ -38,6 +51,7 @@ void print_help() {
 }
 
 int main(int argc, char *argv[]) {
+    atexit(cleanup_libraries);
     if (argc < 2) {
         printf("usage: flux <file.fx>\nTry 'flux --help' for more information.\n");
         return 1;
@@ -50,6 +64,5 @@ int main(int argc, char *argv[]) {
     if (!ast) return 1;
     execute(ast);
     free_ast(ast);
-    cleanup_libraries();
     return 0;
 }

@@ -148,7 +148,7 @@ Token next_token(const char *source, int *pos) {
     }
     
     // Number literal
-    if (isdigit(source[*pos]) || (source[*pos] == '.' && isdigit(source[*pos+1]))) {
+    if (isdigit((unsigned char)source[*pos]) || (source[*pos] == '.' && isdigit((unsigned char)source[*pos+1]))) {
         int i = 0;
         int has_dot = 0;
         while (isdigit(source[*pos]) || (source[*pos] == '.' && !has_dot)) {

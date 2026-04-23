@@ -66,7 +66,7 @@ static const char* allowed_functions[] = {
 
 static int is_library_allowed(const char *name) {
     // Reject paths with directory separators, parent dir, or absolute paths
-    if (strchr(name, '/') != NULL || strstr(name, "..") != NULL || name[0] == '.') {
+    if (strchr(name, '/') != NULL || strstr(name, "..") != NULL || name[0] == '.' || !name || !*name) {
         return 0;
     }
     for (int i = 0; allowed_libs[i] != NULL; i++) {
@@ -105,19 +105,21 @@ static const char* eval_expression(Node *expr) {
     switch (expr->type) {
         case NODE_STRING:
             if (expr->is_identifier) {
-                char *val = NULL;
-                for (int i = 0; i < var_count; i++) {
-                    if (strcmp(vars[i].name, expr->value) == 0) {
-                        val = vars[i].value;
-                        break;
-                    }
+                char *val = get_var(expr->value);
+                if (val) {
+                    safe_strcpy(buf, val, 256);
+                } else {
+                    fprintf(stderr, "Runtime error: undefined variable '%s'\n", expr->value);
                 }
-                if (val) safe_strcpy(buf, val, 256);
             } else {
                 safe_strcpy(buf, expr->value, 256);
             }
             break;
         case NODE_NUMBER:
+            safe_strcpy(buf, expr->value, 256);
+            break;
+        case NODE_NUMBERS:
+        case NODE_LETTERS:
             safe_strcpy(buf, expr->value, 256);
             break;
         default:
@@ -143,6 +145,8 @@ static void set_var(const char *name, const char *value) {
         safe_strcpy(vars[var_count].name, name, 64);
         safe_strcpy(vars[var_count].value, value, 256);
         var_count++;
+    } else {
+        fprintf(stderr, "Runtime error: too many variables defined (max %d)\n", MAX_VARS);
     }
 }
 
@@ -155,6 +159,7 @@ static Node* get_block(const char *name) {
 static void define_block(const char *name, Node *body) {
     for (int i = 0; i < block_count; i++) {
         if (strcmp(blocks[i].name, name) == 0) {
+            fprintf(stderr, "Warning: redefining block '%s'\n", name);
             if (blocks[i].body) free_ast(blocks[i].body);
             blocks[i].body = body;
             return;
@@ -164,6 +169,9 @@ static void define_block(const char *name, Node *body) {
         safe_strcpy(blocks[block_count].name, name, 64);
         blocks[block_count].body = body;
         block_count++;
+    } else {
+        fprintf(stderr, "Runtime error: too many blocks defined (max %d)\n", MAX_BLOCKS);
+        free_ast(body);
     }
 }
 
@@ -184,25 +192,28 @@ static void call_foreign_function(const char *name, Node *args) {
         return;
     }
     
+    typedef double (*math_func_t)(double);
+    typedef int (*puts_func_t)(const char*);
+
     if (strcmp(name, "sqrt") == 0) {
         if (!args) { fprintf(stderr, "sqrt expects one argument\n"); return; }
         double x = atof(eval_expression(args));
-        double (*f)(double) = (double (*)(double))func_ptr;
+        math_func_t f = (math_func_t)func_ptr;
         printf("%g\n", f(x));
     } else if (strcmp(name, "puts") == 0) {
         if (!args) { fprintf(stderr, "puts expects one argument\n"); return; }
         const char *arg = eval_expression(args);
-        int (*f)(const char*) = (int (*)(const char*))func_ptr;
+        puts_func_t f = (puts_func_t)func_ptr;
         f(arg);
     } else if (strcmp(name, "sin") == 0) {
         if (!args) { fprintf(stderr, "sin expects one argument\n"); return; }
         double x = atof(eval_expression(args));
-        double (*f)(double) = (double (*)(double))func_ptr;
+        math_func_t f = (math_func_t)func_ptr;
         printf("%g\n", f(x));
     } else if (strcmp(name, "cos") == 0) {
         if (!args) { fprintf(stderr, "cos expects one argument\n"); return; }
         double x = atof(eval_expression(args));
-        double (*f)(double) = (double (*)(double))func_ptr;
+        math_func_t f = (math_func_t)func_ptr;
         printf("%g\n", f(x));
     } else {
         fprintf(stderr, "Runtime error: unsupported function '%s'\n", name);
@@ -220,6 +231,8 @@ static void save_codestring(const char *name, const char *content) {
         safe_strcpy(codestrings[codestring_count].name, name, 64);
         safe_strcpy(codestrings[codestring_count].content, content, 256);
         codestring_count++;
+    } else {
+        fprintf(stderr, "Runtime error: too many codestrings defined (max %d)\n", MAX_CODESTRINGS);
     }
 }
 
@@ -234,7 +247,7 @@ static char* get_codestring(const char *name) {
 
 static void display_menu(Node *menu_node) {
     if (!menu_node || menu_node->type != NODE_MENU) return;
-    
+
     printf("\n=== Menu ===\n");
     int idx = 1;
     Node *item = menu_node->body;
@@ -246,6 +259,22 @@ static void display_menu(Node *menu_node) {
     }
     printf("> ");
     fflush(stdout);
+    // Read user selection
+    char input[256];
+    if (fgets(input, sizeof(input), stdin)) {
+        int choice = atoi(input);
+        if (choice >= 1 && choice <= idx - 1) {
+            // Find the selected option
+            Node *selected = menu_node->body;
+            for (int i = 1; i < choice && selected; i++) {
+                selected = selected->next;
+            }
+            if (selected && selected->type == NODE_OPTION) {
+                // Set last_input to the selected value for if user said
+                safe_strcpy(last_input, selected->value, 256);
+            }
+        }
+    }
 }
 
 static void free_item_list(char **items, int count) {
@@ -261,11 +290,16 @@ static ItemList parse_item_list(const char *data) {
     char *buffer = strdup(data);
     if (!buffer) return list;
 
+    int success = 1;
     if (strncmp(buffer, "NUMBERS:", 8) == 0) {
         char *nums = buffer + 8;
         char *token = strtok(nums, "|");
         while (token && list.count < MAX_LIST_ITEMS) {
             list.items[list.count] = strdup(token);
+            if (!list.items[list.count]) {
+                success = 0;
+                break;
+            }
             list.count++;
             token = strtok(NULL, "|");
         }
@@ -274,6 +308,10 @@ static ItemList parse_item_list(const char *data) {
         char *token = strtok(lets, "|");
         while (token && list.count < MAX_LIST_ITEMS) {
             list.items[list.count] = strdup(token);
+            if (!list.items[list.count]) {
+                success = 0;
+                break;
+            }
             list.count++;
             token = strtok(NULL, "|");
         }
@@ -281,11 +319,22 @@ static ItemList parse_item_list(const char *data) {
         char *token = strtok(buffer, "|");
         while (token && list.count < MAX_LIST_ITEMS) {
             list.items[list.count] = strdup(token);
+            if (!list.items[list.count]) {
+                success = 0;
+                break;
+            }
             list.count++;
             token = strtok(NULL, "|");
         }
     }
     free(buffer);
+    if (!success) {
+        // Free already allocated items on failure
+        for (int i = 0; i < list.count; i++) {
+            free(list.items[i]);
+        }
+        list.count = 0;
+    }
     return list;
 }
 
@@ -293,6 +342,8 @@ static void print_combinations(ItemList *list, const char *success_msg) {
     printf("Generating combinations...\n");
     for (int i = 0; i < list->count; i++) {
         printf("Trying: %s\n", list->items[i]);
+        // In a real brute-force, this would attempt login or something
+        // For this demo, we just print success
         printf("%s\n", success_msg);
     }
 }
@@ -301,15 +352,7 @@ void execute(Node *node) {
     while (node) {
         switch (node->type) {
             case NODE_WRITE: {
-                const char *out = node->value;
-                if (node->is_identifier) {
-                    char *v = get_var(node->value);
-                    if (!v) {
-                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
-                        break;
-                    }
-                    out = v;
-                }
+                const char *out = eval_expression(node);
                 printf("%s\n", out);
                 break;
             }
@@ -332,6 +375,7 @@ void execute(Node *node) {
                     }
                     expected = v;
                 }
+                // Exact match for now
                 if (strcmp(last_input, expected) == 0 && node->body)
                     execute(node->body);
                 else if (node->else_body)
@@ -339,28 +383,12 @@ void execute(Node *node) {
                 break;
             }
             case NODE_REPLY: {
-                const char *out = node->value;
-                if (node->is_identifier) {
-                    char *v = get_var(node->value);
-                    if (!v) {
-                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
-                        break;
-                    }
-                    out = v;
-                }
+                const char *out = eval_expression(node);
                 printf("%s\n", out);
                 break;
             }
             case NODE_SET: {
-                const char *val = node->value;
-                if (node->is_identifier) {
-                    char *v = get_var(node->value);
-                    if (!v) {
-                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
-                        break;
-                    }
-                    val = v;
-                }
+                const char *val = eval_expression(node);
                 set_var(node->var_name, val);
                 break;
             }
@@ -390,7 +418,9 @@ void execute(Node *node) {
                 void *h = dlopen(node->value, RTLD_LAZY);
                 if (!h) {
                     fprintf(stderr, "Runtime error: cannot load '%s': %s\n", node->value, dlerror());
-                } else if (lib_count < MAX_LIBS) {
+                    break;
+                }
+                if (lib_count < MAX_LIBS) {
                     lib_handles[lib_count++] = h;
                 } else {
                     dlclose(h);
@@ -412,22 +442,24 @@ void execute(Node *node) {
             case NODE_FUNCTION: {
                 if (node->body) {
                     ItemList list = parse_item_list(node->body->value);
-                    print_combinations(&list, "Access granted");
-                    for (int i = 0; i < list.count; i++) free(list.items[i]);
+                    if (list.count > 0) {
+                        print_combinations(&list, "Access granted");
+                    }
+                    free_item_list(list.items, list.count);
                 }
                 break;
             }
             case NODE_INPUT_CHECK: {
-                if (node->var_name[0] != '\0') {
-                    if (strcmp(last_input, node->var_name) == 0 && node->body) {
-                        execute(node->body);
-                    }
-                }
+                // This node type is for checking input, but implementation is minimal
+                // It could be used for more complex input validation
                 break;
             }
             case NODE_CODESTRING: {
                 if (node->value[0] != '\0') {
-                    define_block(node->var_name, parse_codestring(node->value));
+                    Node *body = parse_codestring(node->value);
+                    if (body) {
+                        define_block(node->var_name, body);
+                    }
                 }
                 break;
             }
