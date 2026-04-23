@@ -6,6 +6,8 @@
 #include <dlfcn.h>
 #include <math.h>
 
+extern Node* parse_codestring(const char *code);
+
 static char last_input[256] = "";
 
 #define MAX_VARS 256
@@ -27,6 +29,20 @@ static int block_count = 0;
 #define MAX_LIBS 16
 static void* lib_handles[MAX_LIBS];
 static int lib_count = 0;
+
+#define MAX_LIST_ITEMS 256
+typedef struct {
+    char *items[MAX_LIST_ITEMS];
+    int count;
+} ItemList;
+
+#define MAX_CODESTRINGS 16
+typedef struct {
+    char name[64];
+    char content[256];
+} Codestring;
+static Codestring codestrings[MAX_CODESTRINGS];
+static int codestring_count = 0;
 
 // Recursion depth guard
 #define MAX_RECURSION_DEPTH 100
@@ -192,6 +208,87 @@ static void call_foreign_function(const char *name, Node *args) {
     }
 }
 
+static void save_codestring(const char *name, const char *content) {
+    for (int i = 0; i < codestring_count; i++) {
+        if (strcmp(codestrings[i].name, name) == 0) {
+            safe_strcpy(codestrings[i].content, content, 256);
+            return;
+        }
+    }
+    if (codestring_count < MAX_CODESTRINGS) {
+        safe_strcpy(codestrings[codestring_count].name, name, 64);
+        safe_strcpy(codestrings[codestring_count].content, content, 256);
+        codestring_count++;
+    }
+}
+
+static char* get_codestring(const char *name) {
+    for (int i = 0; i < codestring_count; i++) {
+        if (strcmp(codestrings[i].name, name) == 0) {
+            return codestrings[i].content;
+        }
+    }
+    return NULL;
+}
+
+static void display_menu(Node *menu_node) {
+    if (!menu_node || menu_node->type != NODE_MENU) return;
+    
+    printf("\n=== Menu ===\n");
+    int idx = 1;
+    Node *item = menu_node->body;
+    while (item) {
+        if (item->type == NODE_OPTION) {
+            printf("%d. %s\n", idx++, item->value);
+        }
+        item = item->next;
+    }
+    printf("> ");
+    fflush(stdout);
+}
+
+static ItemList parse_item_list(const char *data) {
+    ItemList list = {.count = 0};
+    if (!data || !data[0]) return list;
+    
+    char buffer[512];
+    safe_strcpy(buffer, data, 512);
+    
+    if (strncmp(buffer, "NUMBERS:", 8) == 0) {
+        char *nums = buffer + 8;
+        char *token = strtok(nums, "|");
+        while (token && list.count < MAX_LIST_ITEMS) {
+            list.items[list.count] = strdup(token);
+            list.count++;
+            token = strtok(NULL, "|");
+        }
+    } else if (strncmp(buffer, "LETTERS:", 8) == 0) {
+        char *lets = buffer + 8;
+        char *token = strtok(lets, "|");
+        while (token && list.count < MAX_LIST_ITEMS) {
+            list.items[list.count] = strdup(token);
+            list.count++;
+            token = strtok(NULL, "|");
+        }
+    } else {
+        char *token = strtok(buffer, "|");
+        while (token && list.count < MAX_LIST_ITEMS) {
+            list.items[list.count] = strdup(token);
+            list.count++;
+            token = strtok(NULL, "|");
+        }
+    }
+    return list;
+}
+
+static void print_combinations(ItemList *list, const char *success_msg) {
+    printf("Generating combinations...\n");
+    for (int i = 0; i < list->count; i++) {
+        printf("Trying: %s\n", list->items[i]);
+        printf("%s\n", success_msg);
+    }
+}
+
 void execute(Node *node) {
     while (node) {
         switch (node->type) {
@@ -278,8 +375,53 @@ void execute(Node *node) {
             case NODE_FCALL:
                 call_foreign_function(node->var_name, node->body);
                 break;
+            case NODE_MENU:
+                display_menu(node);
+                break;
+            case NODE_SAVE:
+                if (node->body) {
+                    save_codestring(node->var_name, node->value);
+                }
+                break;
+            case NODE_FUNCTION: {
+                if (node->body) {
+                    ItemList list = parse_item_list(node->body->value);
+                    print_combinations(&list, "Access granted");
+                    for (int i = 0; i < list.count; i++) free(list.items[i]);
+                }
+                break;
+            }
+            case NODE_INPUT_CHECK: {
+                if (node->var_name[0] != '\0') {
+                    if (strcmp(last_input, node->var_name) == 0 && node->body) {
+                        execute(node->body);
+                    }
+                }
+                break;
+            }
+            case NODE_CODESTRING: {
+                if (node->value[0] != '\0') {
+                    define_block(node->var_name, parse_codestring(node->value));
+                }
+                break;
+            }
             default: break;
         }
         node = node->next;
+    }
+}
+
+void execute_codestring(const char *name) {
+    Node *body = get_block(name);
+    if (body) {
+        if (recursion_depth >= MAX_RECURSION_DEPTH) {
+            fprintf(stderr, "Runtime error: maximum recursion depth exceeded\n");
+            return;
+        }
+        recursion_depth++;
+        execute(body);
+        recursion_depth--;
+    } else {
+        fprintf(stderr, "Runtime error: codestring '%s' not found\n", name);
     }
 }

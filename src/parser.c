@@ -1,14 +1,197 @@
+#define _POSIX_C_SOURCE 200809L
 #include "parser.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+
+#define MAX_TEMPLATES 64
+#define TEMPLATE_SIZE 8192
+#define MAX_LINE_LENGTH 1024
 
 static int current = 0;
+static ParserState parser_state = STATE_NORMAL;
+static char template_buffer[TEMPLATE_SIZE] = {0};
+static char current_codestring_name[64] = {0};
+static int template_pos = 0;
 
 static Node* parse_statement(Token *tokens, int count);
 static Node* parse_if(Token *tokens, int count);
 static Node* parse_define(Token *tokens, int count);
 static Node* parse_expression(Token *tokens, int count);
+static Node* parse_menu(Token *tokens, int count);
+static Node* parse_option(Token *tokens, int count);
+static Node* parse_function(Token *tokens, int count);
+static Node* parse_iterate(Token *tokens, int count);
+static Node* parse_save(Token *tokens, int count);
+static Node* parse_input_check(Token *tokens, int count);
+Node* parse_codestring(const char *code);
+
+static void reset_template_state(void) {
+    template_buffer[0] = '\0';
+    current_codestring_name[0] = '\0';
+    template_pos = 0;
+    parser_state = STATE_NORMAL;
+}
+
+static void append_to_template(const char *line) {
+    int len = strlen(line);
+    if (template_pos + len < TEMPLATE_SIZE - 1) {
+        strcpy(template_buffer + template_pos, line);
+        template_pos += len;
+    }
+}
+
+Node* parse_codestring(const char *code) {
+    Token tokens[2048];
+    int count = lex_all(code, tokens);
+    current = 0;
+    Node *head = NULL, *tail = NULL;
+    
+    while (current < count && tokens[current].type != TOKEN_EOF) {
+        Node *stmt = parse_statement(tokens, count);
+        if (stmt) {
+            if (!head) {
+                head = tail = stmt;
+            } else {
+                tail->next = stmt;
+                tail = stmt;
+            }
+        } else {
+            while (current < count && tokens[current].type != TOKEN_WRITE &&
+                   tokens[current].type != TOKEN_WAIT &&
+                   tokens[current].type != TOKEN_IF &&
+                   tokens[current].type != TOKEN_REPLY &&
+                   tokens[current].type != TOKEN_SET &&
+                   tokens[current].type != TOKEN_DEFINE &&
+                   tokens[current].type != TOKEN_LOAD &&
+                   tokens[current].type != TOKEN_CALL &&
+                   tokens[current].type != TOKEN_IDENTIFIER &&
+                   tokens[current].type != TOKEN_EOF) {
+                current++;
+            }
+        }
+    }
+    return head;
+}
+
+Node* parse_file(const char *filename) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        fprintf(stderr, "Cannot open file: %s\n", filename);
+        return NULL;
+    }
+    
+    reset_template_state();
+    Node *head = NULL, *tail = NULL;
+    char line[MAX_LINE_LENGTH];
+    char current_func_name[64] = {0};
+    int in_template = 0;
+    
+    while (fgets(line, sizeof(line), fp)) {
+        char *trimmed = trim_whitespace(line);
+        
+        if (in_template) {
+            if (is_template_delimiter(trimmed)) {
+                fprintf(stderr, "DEBUG: closing template, state=%d\n", parser_state);
+                in_template = 0;
+                parser_state = STATE_EXPECT_FUNC;
+                continue;
+            }
+            append_to_template(line);
+            continue;
+        }
+        
+        if (is_template_delimiter(trimmed)) {
+            in_template = 1;
+            parser_state = STATE_IN_TEMPLATE;
+            template_buffer[0] = '\0';
+            template_pos = 0;
+            continue;
+        }
+        
+        if (parser_state == STATE_EXPECT_FUNC) {
+            fprintf(stderr, "DEBUG STATE_EXPECT: trimmed='%s', len=%zu\n", trimmed, strlen(trimmed));
+            fprintf(stderr, "DEBUG STATE_EXPECT: first17='%.*s'\n", 17, trimmed);
+            if (strncmp(trimmed, "function add + (\"", 17) == 0) {
+                char *start = strchr(trimmed + 17, '"');
+                if (start) {
+                    start++;
+                    char *end = strchr(start, '"');
+                    if (end) {
+                        *end = '\0';
+                        strcpy(current_func_name, start);
+                        
+                        Node *func_node = malloc(sizeof(Node));
+                        func_node->type = NODE_CODESTRING;
+                        strcpy(func_node->var_name, current_func_name);
+                        strcpy(func_node->value, template_buffer);
+                        func_node->body = NULL;
+                        func_node->next = NULL;
+                        
+                        if (!head) {
+                            head = tail = func_node;
+                        } else {
+                            tail->next = func_node;
+                            tail = func_node;
+                        }
+                        parser_state = STATE_NORMAL;
+                        continue;
+                    }
+                }
+            } else if (trimmed[0] == '\0' || trimmed[0] == '#') {
+                continue;
+            } else {
+                fprintf(stderr, "Parser error: expected 'function add + (\"NAME\")' after template\n");
+                parser_state = STATE_NORMAL;
+                continue;
+            }
+        }
+        
+        Token tokens[2048];
+        int count = lex_all(line, tokens);
+        current = 0;
+        
+        while (current < count && tokens[current].type != TOKEN_EOF) {
+            Node *stmt = parse_statement(tokens, count);
+            if (stmt) {
+                if (!head) {
+                    head = tail = stmt;
+                } else {
+                    tail->next = stmt;
+                    tail = stmt;
+                }
+            } else {
+                while (current < count && tokens[current].type != TOKEN_WRITE &&
+                       tokens[current].type != TOKEN_WAIT &&
+                       tokens[current].type != TOKEN_IF &&
+                       tokens[current].type != TOKEN_REPLY &&
+                       tokens[current].type != TOKEN_SET &&
+                       tokens[current].type != TOKEN_DEFINE &&
+                       tokens[current].type != TOKEN_LOAD &&
+                       tokens[current].type != TOKEN_CALL &&
+                       tokens[current].type != TOKEN_MENU &&
+                       tokens[current].type != TOKEN_SAVE &&
+                       tokens[current].type != TOKEN_FUNCTION &&
+                       tokens[current].type != TOKEN_INPUT &&
+                       tokens[current].type != TOKEN_IDENTIFIER &&
+                       tokens[current].type != TOKEN_EOF) {
+                    current++;
+                }
+                if (current < count) current++;
+            }
+        }
+    }
+    
+    fclose(fp);
+    
+    if (parser_state == STATE_IN_TEMPLATE) {
+        fprintf(stderr, "Parser error: unclosed template (missing closing '\\-')\n");
+    }
+    
+    return head;
+}
 
 Node* parse(Token *tokens, int count) {
     current = 0;
@@ -317,6 +500,27 @@ static Node* parse_statement(Token *tokens, int count) {
             node->body = arg_head;
             break;
         }
+        case TOKEN_MENU: {
+            node = parse_menu(tokens, count);
+            break;
+        }
+        case TOKEN_SAVE: {
+            node = parse_save(tokens, count);
+            break;
+        }
+        case TOKEN_FUNCTION: {
+            node = parse_function(tokens, count);
+            break;
+        }
+        case TOKEN_NUMBERS:
+        case TOKEN_LETTERS: {
+            node = parse_expression(tokens, count);
+            break;
+        }
+        case TOKEN_INPUT: {
+            node = parse_input_check(tokens, count);
+            break;
+        }
         case TOKEN_IDENTIFIER: {
             // Block call
             node = malloc(sizeof(Node));
@@ -377,6 +581,160 @@ static Node* parse_if(Token *tokens, int count) {
     if_node->body = parse_statement(tokens, count);
     if_node->next = NULL;
     return if_node;
+}
+
+static Node* parse_menu(Token *tokens, int count) {
+    current++;
+    Node *menu_node = malloc(sizeof(Node));
+    menu_node->type = NODE_MENU;
+    menu_node->value[0] = '\0';
+    menu_node->is_identifier = 0;
+    menu_node->body = NULL;
+    menu_node->next = NULL;
+    
+    if (current >= count || tokens[current].type != TOKEN_LIST_OPEN) {
+        free(menu_node);
+        return NULL;
+    }
+    current++;
+    
+    Node *item_head = NULL, *item_tail = NULL;
+    while (current < count && tokens[current].type != TOKEN_LIST_CLOSE && tokens[current].type != TOKEN_EOF) {
+        if (tokens[current].type == TOKEN_STRING) {
+            Node *item = malloc(sizeof(Node));
+            item->type = NODE_OPTION;
+            strcpy(item->value, tokens[current].value);
+            item->is_identifier = 0;
+            item->body = NULL;
+            item->next = NULL;
+            
+            if (!item_head) item_head = item_tail = item;
+            else { item_tail->next = item; item_tail = item; }
+        }
+        current++;
+    }
+    if (current < count && tokens[current].type == TOKEN_LIST_CLOSE) current++;
+    menu_node->body = item_head;
+    return menu_node;
+}
+
+static Node* parse_save(Token *tokens, int count) {
+    current++;
+    Node *save_node = malloc(sizeof(Node));
+    save_node->type = NODE_SAVE;
+    save_node->body = NULL;
+    save_node->next = NULL;
+    
+    if (current >= count) {
+        fprintf(stderr, "Parser error: expected codestring name after 'save'\n");
+        free(save_node);
+        return NULL;
+    }
+    
+    if (tokens[current].type == TOKEN_CODE) {
+        current++;
+        if (current >= count || tokens[current].type != TOKEN_IDENTIFIER) {
+            fprintf(stderr, "Parser error: expected codestring identifier\n");
+            free(save_node);
+            return NULL;
+        }
+        strcpy(save_node->var_name, tokens[current].value);
+        save_node->value[0] = '\0';
+        save_node->is_identifier = 0;
+        current++;
+    } else if (tokens[current].type == TOKEN_IDENTIFIER) {
+        strcpy(save_node->var_name, tokens[current].value);
+        current++;
+        if (current < count && tokens[current].type == TOKEN_AS) {
+            current++;
+            if (current < count && tokens[current].type == TOKEN_STRING) {
+                strcpy(save_node->value, tokens[current].value);
+                current++;
+            } else if (current < count && tokens[current].type == TOKEN_IDENTIFIER) {
+                strcpy(save_node->value, tokens[current].value);
+                save_node->is_identifier = 1;
+                current++;
+            }
+        }
+    }
+    return save_node;
+}
+
+static Node* parse_input_check(Token *tokens, int count) {
+    Node *input_node = malloc(sizeof(Node));
+    input_node->type = NODE_INPUT_CHECK;
+    input_node->body = NULL;
+    input_node->next = NULL;
+    
+    if (tokens[current].type == TOKEN_INPUT) {
+        current++;
+        if (current < count && (tokens[current].type == TOKEN_STRING || tokens[current].type == TOKEN_IDENTIFIER)) {
+            strcpy(input_node->var_name, tokens[current].value);
+            input_node->is_identifier = (tokens[current].type == TOKEN_IDENTIFIER);
+            current++;
+        } else {
+            input_node->var_name[0] = '\0';
+            input_node->is_identifier = 0;
+        }
+    }
+    
+    if (current < count && tokens[current].type == TOKEN_USE) {
+        current++;
+        if (current < count) {
+            input_node->body = parse_statement(tokens, count);
+        }
+    }
+    
+    return input_node;
+}
+
+static Node* parse_function(Token *tokens, int count) {
+    current++;
+    Node *func_node = malloc(sizeof(Node));
+    func_node->type = NODE_FUNCTION;
+    func_node->body = NULL;
+    func_node->next = NULL;
+    
+    if (current >= count) {
+        free(func_node);
+        return NULL;
+    }
+    
+    if (tokens[current].type == TOKEN_ADD) {
+        current++;
+        if (current >= count || tokens[current].type != TOKEN_LIST_OPEN) {
+            free(func_node);
+            return NULL;
+        }
+        current++;
+        if (current < count) {
+            Node *data = parse_expression(tokens, count);
+            func_node->body = data;
+        }
+        while (current < count && tokens[current].type != TOKEN_LIST_CLOSE) current++;
+        if (current < count) current++;
+    } else if (tokens[current].type == TOKEN_USE) {
+        current++;
+        if (current < count && tokens[current].type == TOKEN_IDENTIFIER) {
+            strcpy(func_node->value, tokens[current].value);
+            current++;
+            if (current < count && tokens[current].type == TOKEN_FROM) {
+                current++;
+                if (current < count && tokens[current].type == TOKEN_CODE) {
+                    current++;
+                    if (current < count && tokens[current].type == TOKEN_IDENTIFIER) {
+                        strcpy(func_node->var_name, tokens[current].value);
+                        current++;
+                    }
+                }
+            }
+        }
+    } else if (tokens[current].type == TOKEN_IDENTIFIER) {
+        strcpy(func_node->value, tokens[current].value);
+        current++;
+    }
+    
+    return func_node;
 }
 
 void free_ast(Node *node) {

@@ -43,12 +43,8 @@ int main(int argc, char *argv[]) {
         print_help();
         return 0;
     }
-    char *source = read_file(argv[1]);
-    if (!source) return 1;
-    Token tokens[MAX_TOKENS];
-    int token_count = lex_all(source, tokens);
-    free(source);
-    Node *ast = parse(tokens, token_count);
+    Node *ast = parse_file(argv[1]);
+    if (!ast) return 1;
     execute(ast);
     free_ast(ast);
     return 0;

@@ -10,12 +10,26 @@ typedef enum {
     NODE_REPLY,
     NODE_SET,
     NODE_DEFINE,
-    NODE_CALL,      // block call
+    NODE_CALL,
     NODE_LOAD,
-    NODE_FCALL,     // foreign call
+    NODE_FCALL,
     NODE_NUMBER,
-    NODE_STRING
+    NODE_STRING,
+    NODE_MENU,
+    NODE_OPTION,
+    NODE_FUNCTION,
+    NODE_ITERATE,
+    NODE_SAVE,
+    NODE_INPUT_CHECK,
+    NODE_LIST,
+    NODE_CODESTRING
 } NodeType;
+
+typedef enum {
+    STATE_NORMAL,
+    STATE_IN_TEMPLATE,
+    STATE_EXPECT_FUNC
+} ParserState;
 
 typedef struct Node {
     NodeType type;
@@ -27,6 +41,8 @@ typedef struct Node {
 } Node;
 
 Node* parse(Token *tokens, int count);
+Node* parse_file(const char *filename);
+Node* parse_codestring(const char *code);
 void free_ast(Node *node);
 
 #endif

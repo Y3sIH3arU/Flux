@@ -5,7 +5,6 @@
 
 typedef enum {
     TOKEN_WRITE,
-    // TOKEN_SAY removed
     TOKEN_WAIT,
     TOKEN_FOR,
     TOKEN_USER,
@@ -25,7 +24,23 @@ typedef enum {
     TOKEN_NEWLINE,
     TOKEN_EOF,
     TOKEN_IDENTIFIER,
-    TOKEN_UNKNOWN
+    TOKEN_UNKNOWN,
+    TOKEN_MENU,
+    TOKEN_OPTION,
+    TOKEN_FUNCTION,
+    TOKEN_FROM,
+    TOKEN_USE,
+    TOKEN_SAVE,
+    TOKEN_CODE,
+    TOKEN_LIST_OPEN,
+    TOKEN_LIST_CLOSE,
+    TOKEN_LIST_SEP,
+    TOKEN_NUMBERS,
+    TOKEN_LETTERS,
+    TOKEN_INPUT,
+    TOKEN_ADD,
+    TOKEN_TEMPLATE_START,
+    TOKEN_TEMPLATE_END
 } TokenType;
 
 typedef struct {
@@ -35,5 +50,7 @@ typedef struct {
 
 Token next_token(const char *source, int *pos);
 int lex_all(const char *source, Token *tokens);
+char* trim_whitespace(char *str);
+int is_template_delimiter(const char *line);
 
 #endif
