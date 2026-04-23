@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dlfcn.h>
 #include "lexer.h"
 #include "parser.h"
 #include "interpreter.h"
+
+extern void cleanup_libraries();
 
 char* read_file(const char *filename) {
     FILE *f = fopen(filename, "rb");
@@ -47,5 +50,6 @@ int main(int argc, char *argv[]) {
     if (!ast) return 1;
     execute(ast);
     free_ast(ast);
+    cleanup_libraries();
     return 0;
 }

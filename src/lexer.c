@@ -73,27 +73,47 @@ Token next_token(const char *source, int *pos) {
             (*pos) += 8;
         }
         
-        // Collect list items until ]
+        // Collect list items until ] with validation
+        int expecting_item = 1;
         while (source[*pos] != ']' && source[*pos] != '\0') {
-            // Read item
-            while (source[*pos] != ';' && source[*pos] != ']' && source[*pos] != '\0') {
-                if (source[*pos] == ' ' || source[*pos] == '\t') {
+            if (expecting_item) {
+                // Read item
+                int item_start = i;
+                while (source[*pos] != ';' && source[*pos] != ']' && source[*pos] != '\0') {
+                    if (source[*pos] == ' ' || source[*pos] == '\t') {
+                        (*pos)++;
+                        continue;
+                    }
+                    if (i < 255) {
+                        token.value[i++] = source[*pos];
+                    }
                     (*pos)++;
-                    continue;
                 }
-                if (i < 255) {
-                    token.value[i++] = source[*pos];
+                if (i == item_start) {
+                    // Empty item
+                    token.type = TOKEN_UNKNOWN;
+                    return token;
                 }
-                (*pos)++;
-            }
-            if (source[*pos] == ';') {
-                if (i < 255) {
-                    token.value[i++] = '|';
-                }
-                (*pos)++;
+                expecting_item = 0;
             } else {
-                break;
+                // Expecting separator
+                if (source[*pos] == ';') {
+                    if (i < 255) {
+                        token.value[i++] = '|';
+                    }
+                    (*pos)++;
+                    expecting_item = 1;
+                } else {
+                    // Unexpected
+                    token.type = TOKEN_UNKNOWN;
+                    return token;
+                }
             }
+        }
+        if (expecting_item && source[*pos] != ']') {
+            // Trailing separator or incomplete
+            token.type = TOKEN_UNKNOWN;
+            return token;
         }
         token.value[i] = '\0';
         
@@ -130,13 +150,20 @@ Token next_token(const char *source, int *pos) {
     // Number literal
     if (isdigit(source[*pos]) || (source[*pos] == '.' && isdigit(source[*pos+1]))) {
         int i = 0;
-        while (isdigit(source[*pos]) || source[*pos] == '.') {
+        int has_dot = 0;
+        while (isdigit(source[*pos]) || (source[*pos] == '.' && !has_dot)) {
+            if (source[*pos] == '.') has_dot = 1;
             if (i < 255) {
                 token.value[i++] = source[*pos];
             }
             (*pos)++;
         }
         token.value[i] = '\0';
+        if (i > 0 && token.value[i-1] == '.') {
+            // Ends with dot, invalid
+            token.type = TOKEN_UNKNOWN;
+            return token;
+        }
         token.type = TOKEN_NUMBER;
         if (i >= 255) {
             fprintf(stderr, "Lexer warning: number truncated to 255 characters\n");
@@ -184,7 +211,10 @@ Token next_token(const char *source, int *pos) {
         else if (strcmp(token.value, "codestring") == 0) token.type = TOKEN_CODE;
         else if (strcmp(token.value, "numbers") == 0) token.type = TOKEN_NUMBERS;
         else if (strcmp(token.value, "letters") == 0) token.type = TOKEN_LETTERS;
+        else if (strcmp(token.value, "while") == 0) token.type = TOKEN_WHILE;
+        else if (strcmp(token.value, "do") == 0) token.type = TOKEN_DO;
         else if (strcmp(token.value, "input") == 0) token.type = TOKEN_INPUT;
+        else if (strcmp(token.value, "else") == 0) token.type = TOKEN_ELSE;
         else token.type = TOKEN_IDENTIFIER;
         
         return token;

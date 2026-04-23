@@ -22,6 +22,7 @@ typedef enum {
     NODE_SAVE,
     NODE_INPUT_CHECK,
     NODE_LIST,
+    NODE_WHILE,
     NODE_CODESTRING
 } NodeType;
 
@@ -37,6 +38,7 @@ typedef struct Node {
     char value[256];
     int is_identifier;
     struct Node *body;
+    struct Node *else_body;
     struct Node *next;
 } Node;
 

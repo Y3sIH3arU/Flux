@@ -94,7 +94,7 @@ static void safe_strcpy(char *dest, const char *src, size_t dest_size) {
 
 #define TMP_BUF_SIZE 4
 static char tmp_buf[TMP_BUF_SIZE][256];
-static int tmp_idx = 0;
+static unsigned int tmp_idx = 0;
 
 static const char* eval_expression(Node *expr) {
     if (!expr) return "";
@@ -155,6 +155,7 @@ static Node* get_block(const char *name) {
 static void define_block(const char *name, Node *body) {
     for (int i = 0; i < block_count; i++) {
         if (strcmp(blocks[i].name, name) == 0) {
+            if (blocks[i].body) free_ast(blocks[i].body);
             blocks[i].body = body;
             return;
         }
@@ -247,13 +248,19 @@ static void display_menu(Node *menu_node) {
     fflush(stdout);
 }
 
+static void free_item_list(char **items, int count) {
+    for (int i = 0; i < count; i++) {
+        if (items[i]) free(items[i]);
+    }
+}
+
 static ItemList parse_item_list(const char *data) {
     ItemList list = {.count = 0};
     if (!data || !data[0]) return list;
-    
-    char buffer[512];
-    safe_strcpy(buffer, data, 512);
-    
+
+    char *buffer = strdup(data);
+    if (!buffer) return list;
+
     if (strncmp(buffer, "NUMBERS:", 8) == 0) {
         char *nums = buffer + 8;
         char *token = strtok(nums, "|");
@@ -278,6 +285,7 @@ static ItemList parse_item_list(const char *data) {
             token = strtok(NULL, "|");
         }
     }
+    free(buffer);
     return list;
 }
 
@@ -296,7 +304,11 @@ void execute(Node *node) {
                 const char *out = node->value;
                 if (node->is_identifier) {
                     char *v = get_var(node->value);
-                    if (v) out = v; else out = "(undefined)";
+                    if (!v) {
+                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
+                        break;
+                    }
+                    out = v;
                 }
                 printf("%s\n", out);
                 break;
@@ -314,17 +326,27 @@ void execute(Node *node) {
                 const char *expected = node->value;
                 if (node->is_identifier) {
                     char *v = get_var(node->value);
-                    if (v) expected = v; else expected = "";
+                    if (!v) {
+                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
+                        break;
+                    }
+                    expected = v;
                 }
                 if (strcmp(last_input, expected) == 0 && node->body)
                     execute(node->body);
+                else if (node->else_body)
+                    execute(node->else_body);
                 break;
             }
             case NODE_REPLY: {
                 const char *out = node->value;
                 if (node->is_identifier) {
                     char *v = get_var(node->value);
-                    if (v) out = v; else out = "(undefined)";
+                    if (!v) {
+                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
+                        break;
+                    }
+                    out = v;
                 }
                 printf("%s\n", out);
                 break;
@@ -333,7 +355,11 @@ void execute(Node *node) {
                 const char *val = node->value;
                 if (node->is_identifier) {
                     char *v = get_var(node->value);
-                    if (v) val = v; else val = "";
+                    if (!v) {
+                        fprintf(stderr, "Runtime error: undefined variable '%s'\n", node->value);
+                        break;
+                    }
+                    val = v;
                 }
                 set_var(node->var_name, val);
                 break;
@@ -424,4 +450,11 @@ void execute_codestring(const char *name) {
     } else {
         fprintf(stderr, "Runtime error: codestring '%s' not found\n", name);
     }
+}
+
+void cleanup_libraries() {
+    for (int i = 0; i < lib_count; i++) {
+        if (lib_handles[i]) dlclose(lib_handles[i]);
+    }
+    lib_count = 0;
 }

@@ -36,11 +36,15 @@ static void reset_template_state(void) {
 }
 
 static void append_to_template(const char *line) {
-    int len = strlen(line);
-    if (template_pos + len < TEMPLATE_SIZE - 1) {
-        strcpy(template_buffer + template_pos, line);
-        template_pos += len;
+    size_t line_len = strlen(line);
+    if (template_pos + line_len + 1 > TEMPLATE_SIZE) {
+        fprintf(stderr, "Template overflow: template exceeds %d bytes\n", TEMPLATE_SIZE);
+        // Stop accumulating to prevent overflow
+        return;
     }
+    memcpy(template_buffer + template_pos, line, line_len);
+    template_pos += line_len;
+    template_buffer[template_pos] = '\0'; // Ensure null termination, though not necessary if line includes it
 }
 
 Node* parse_codestring(const char *code) {
@@ -91,7 +95,8 @@ Node* parse_file(const char *filename) {
     
     while (fgets(line, sizeof(line), fp)) {
         char *trimmed = trim_whitespace(line);
-        
+        if (!trimmed || *trimmed == '\0') continue;
+
         if (in_template) {
             if (is_template_delimiter(trimmed)) {
                 fprintf(stderr, "DEBUG: closing template, state=%d\n", parser_state);
@@ -121,6 +126,11 @@ Node* parse_file(const char *filename) {
                     char *end = strchr(start, '"');
                     if (end) {
                         *end = '\0';
+                        if (strlen(start) >= sizeof(current_func_name)) {
+                            fprintf(stderr, "Parser error: function name too long\n");
+                            parser_state = STATE_NORMAL;
+                            continue;
+                        }
                         strcpy(current_func_name, start);
                         
                         Node *func_node = malloc(sizeof(Node));
@@ -240,13 +250,15 @@ static Node* parse_define(Token *tokens, int count) {
         return NULL;
     }
     current++;
-    
+
     Node *define_node = malloc(sizeof(Node));
+    if (!define_node) return NULL;
     define_node->type = NODE_DEFINE;
     strcpy(define_node->var_name, block_name);
     define_node->value[0] = '\0';
     define_node->is_identifier = 0;
     define_node->body = NULL;
+    define_node->else_body = NULL;
     define_node->next = NULL;
     
     Node *body_head = NULL, *body_tail = NULL;
@@ -268,7 +280,8 @@ static Node* parse_define(Token *tokens, int count) {
         current++;
     } else {
         fprintf(stderr, "Parser error: expected 'end' to close block definition\n");
-        // Still return the node so execution can continue with partial AST
+        free_ast(define_node);
+        return NULL;
     }
     define_node->body = body_head;
     return define_node;
@@ -441,6 +454,10 @@ static Node* parse_statement(Token *tokens, int count) {
                 return NULL;
             }
             const char *lib = tokens[current].value;
+            if (!lib || !*lib) {
+                fprintf(stderr, "Parser error: library name cannot be empty\n");
+                return NULL;
+            }
             // Security: reject path traversal (also done in interpreter)
             if (strchr(lib, '/') || strstr(lib, "..") || lib[0] == '.') {
                 fprintf(stderr, "Parser error: library name must be a simple filename (no paths)\n");
@@ -570,6 +587,7 @@ static Node* parse_if(Token *tokens, int count) {
     }
     current++;
     Node *if_node = malloc(sizeof(Node));
+    if (!if_node) return NULL;
     if_node->type = NODE_IF_SAID;
     if (strlen(cond.value) >= 256) {
         fprintf(stderr, "Parser error: condition string too long\n");
@@ -579,7 +597,12 @@ static Node* parse_if(Token *tokens, int count) {
     strcpy(if_node->value, cond.value);
     if_node->is_identifier = (cond.type == TOKEN_IDENTIFIER);
     if_node->body = parse_statement(tokens, count);
+    if_node->else_body = NULL;
     if_node->next = NULL;
+    if (current < count && tokens[current].type == TOKEN_ELSE) {
+        current++;
+        if_node->else_body = parse_statement(tokens, count);
+    }
     return if_node;
 }
 
@@ -741,6 +764,7 @@ void free_ast(Node *node) {
     while (node) {
         Node *next = node->next;
         if (node->body) free_ast(node->body);
+        if (node->else_body) free_ast(node->else_body);
         free(node);
         node = next;
     }
